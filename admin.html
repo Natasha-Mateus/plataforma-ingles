@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Painel do Admin</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-bar">
+      <h1 style="margin:0;">Painel do Admin</h1>
+      <div>
+        <span class="who" id="nomeAdmin"></span>
+        <button class="link" id="btnSair" style="margin-left:14px;">Sair</button>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+      <div class="card">
+        <h2>Nova aula (vídeo)</h2>
+        <label>Título</label>
+        <input type="text" id="tituloAula" placeholder="Past simple: verbos irregulares" />
+        <label>ID do vídeo no YouTube</label>
+        <input type="text" id="youtubeId" placeholder="Ex: dQw4w9WgXcQ (da URL youtu.be/ID)" />
+        <label>Ordem (número, define a sequência)</label>
+        <input type="text" id="ordemAula" placeholder="1" />
+        <button class="primary" id="btnSalvarAula">Salvar aula</button>
+      </div>
+
+      <div class="card">
+        <h2>Novo exercício</h2>
+        <label>Aula vinculada</label>
+        <select id="selectAulaExercicio"></select>
+        <label>Pergunta</label>
+        <input type="text" id="pergunta" placeholder="Yesterday I ___ (go) to the market." />
+        <label>Alternativas (separadas por vírgula)</label>
+        <input type="text" id="alternativas" placeholder="went, goed, going" />
+        <label>Qual é a resposta certa (copie exatamente uma das alternativas)</label>
+        <input type="text" id="respostaCerta" placeholder="went" />
+        <button class="primary" id="btnSalvarExercicio">Salvar exercício</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Liberar conteúdo por aluno</h2>
+      <p class="small" style="margin-top:-6px;">Marque as aulas que cada aluno já pode ver.</p>
+      <div id="tabelaLiberacao">
+        <p class="small">Carregando...</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Cadastrar aluno</h2>
+      <p class="small" style="margin-top:-6px;">
+        No MVP, a criação da conta (email/senha) ainda é feita direto no Console do Firebase &gt; Authentication &gt; Add user.
+        Depois de criar lá, cole o UID do aluno aqui pra registrar o papel dele:
+      </p>
+      <label>UID do aluno (copiado do Console do Firebase)</label>
+      <input type="text" id="uidAluno" placeholder="Ex: aB3xY..." />
+      <label>Nome do aluno</label>
+      <input type="text" id="nomeNovoAluno" placeholder="Nome exibido na plataforma" />
+      <button class="primary" id="btnCadastrarAluno">Cadastrar como aluno</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { firebaseConfig } from "./firebase-config.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+    import {
+      getFirestore, doc, getDoc, setDoc, collection, getDocs, addDoc,
+      updateDoc, arrayUnion, arrayRemove
+    } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    document.getElementById("btnSair").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
+
+    let conteudosCache = [];
+    let alunosCache = [];
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { window.location.href = "index.html"; return; }
+
+      const userSnap = await getDoc(doc(db, "usuarios", user.uid));
+      if (!userSnap.exists() || userSnap.data().papel !== "admin") {
+        alert("Essa conta não tem acesso de admin.");
+        window.location.href = "index.html";
+        return;
+      }
+
+      document.getElementById("nomeAdmin").textContent = userSnap.data().nome || user.email;
+      await carregarConteudos();
+      await carregarAlunosETabela();
+    });
+
+    async function carregarConteudos() {
+      const snap = await getDocs(collection(db, "conteudos"));
+      conteudosCache = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+
+      const select = document.getElementById("selectAulaExercicio");
+      select.innerHTML = conteudosCache.map(c => `<option value="${c.id}">${c.titulo}</option>`).join("");
+    }
+
+    document.getElementById("btnSalvarAula").addEventListener("click", async () => {
+      const titulo = document.getElementById("tituloAula").value.trim();
+      const youtubeId = document.getElementById("youtubeId").value.trim();
+      const ordem = parseInt(document.getElementById("ordemAula").value) || 0;
+
+      if (!titulo || !youtubeId) { alert("Preencha título e ID do vídeo."); return; }
+
+      await addDoc(collection(db, "conteudos"), { titulo, youtubeId, ordem });
+      document.getElementById("tituloAula").value = "";
+      document.getElementById("youtubeId").value = "";
+      document.getElementById("ordemAula").value = "";
+
+      await carregarConteudos();
+      await carregarAlunosETabela();
+      alert("Aula salva!");
+    });
+
+    document.getElementById("btnSalvarExercicio").addEventListener("click", async () => {
+      const conteudoId = document.getElementById("selectAulaExercicio").value;
+      const pergunta = document.getElementById("pergunta").value.trim();
+      const alternativas = document.getElementById("alternativas").value.split(",").map(s => s.trim()).filter(Boolean);
+      const respostaCerta = document.getElementById("respostaCerta").value.trim();
+
+      if (!conteudoId || !pergunta || alternativas.length < 2 || !respostaCerta) {
+        alert("Preencha todos os campos (mínimo 2 alternativas).");
+        return;
+      }
+      if (!alternativas.includes(respostaCerta)) {
+        alert("A resposta certa precisa ser idêntica a uma das alternativas digitadas.");
+        return;
+      }
+
+      await addDoc(collection(db, "exercicios"), { conteudoId, pergunta, alternativas, respostaCerta });
+      document.getElementById("pergunta").value = "";
+      document.getElementById("alternativas").value = "";
+      document.getElementById("respostaCerta").value = "";
+      alert("Exercício salvo!");
+    });
+
+    document.getElementById("btnCadastrarAluno").addEventListener("click", async () => {
+      const uid = document.getElementById("uidAluno").value.trim();
+      const nome = document.getElementById("nomeNovoAluno").value.trim();
+
+      if (!uid || !nome) { alert("Preencha o UID e o nome."); return; }
+
+      await setDoc(doc(db, "usuarios", uid), {
+        nome,
+        papel: "aluno",
+        conteudosLiberados: []
+      });
+
+      document.getElementById("uidAluno").value = "";
+      document.getElementById("nomeNovoAluno").value = "";
+      await carregarAlunosETabela();
+      alert("Aluno cadastrado!");
+    });
+
+    async function carregarAlunosETabela() {
+      const snap = await getDocs(collection(db, "usuarios"));
+      alunosCache = snap.docs
+        .map(d => ({ uid: d.id, ...d.data() }))
+        .filter(u => u.papel === "aluno");
+
+      const container = document.getElementById("tabelaLiberacao");
+
+      if (alunosCache.length === 0) {
+        container.innerHTML = `<p class="small">Nenhum aluno cadastrado ainda.</p>`;
+        return;
+      }
+      if (conteudosCache.length === 0) {
+        container.innerHTML = `<p class="small">Cadastre uma aula primeiro.</p>`;
+        return;
+      }
+
+      let html = `<table><thead><tr><th>Aluno</th>`;
+      conteudosCache.forEach(c => html += `<th>${c.titulo}</th>`);
+      html += `</tr></thead><tbody>`;
+
+      alunosCache.forEach(aluno => {
+        html += `<tr><td>${aluno.nome}</td>`;
+        conteudosCache.forEach(c => {
+          const liberado = (aluno.conteudosLiberados || []).includes(c.id);
+          html += `<td style="text-align:center;">
+            <input type="checkbox" data-uid="${aluno.uid}" data-conteudo="${c.id}" ${liberado ? "checked" : ""} />
+          </td>`;
+        });
+        html += `</tr>`;
+      });
+      html += `</tbody></table>`;
+      container.innerHTML = html;
+
+      container.querySelectorAll("input[type=checkbox]").forEach(cb => {
+        cb.addEventListener("change", async (e) => {
+          const uid = e.target.dataset.uid;
+          const conteudoId = e.target.dataset.conteudo;
+          const ref = doc(db, "usuarios", uid);
+          if (e.target.checked) {
+            await updateDoc(ref, { conteudosLiberados: arrayUnion(conteudoId) });
+          } else {
+            await updateDoc(ref, { conteudosLiberados: arrayRemove(conteudoId) });
+          }
+        });
+      });
+    }
+  </script>
+</body>
+</html>
