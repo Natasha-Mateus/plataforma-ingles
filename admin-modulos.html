@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Módulos e Conteúdos - MD English Admin</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="main-area">
+      <h1>Módulos e Conteúdos</h1>
+      <p class="muted">Crie módulos, adicione conteúdo dentro deles e libere para os alunos.</p>
+
+      <div style="display:grid; grid-template-columns: 260px 1fr; gap: 20px;">
+
+        <div>
+          <div class="card">
+            <h2 id="tituloFormModulo">Novo módulo</h2>
+            <input type="hidden" id="moduloEditandoId" value="" />
+            <label>Nome</label>
+            <input type="text" id="nomeModulo" placeholder="Ex: Presente Simples" />
+            <label>Descrição</label>
+            <input type="text" id="descModulo" placeholder="Curta descrição do módulo" />
+            <label>Nível</label>
+            <input type="text" id="nivelModulo" placeholder="Ex: Iniciante" />
+            <label>Ordem</label>
+            <input type="text" id="ordemModulo" placeholder="1" />
+            <div style="display:flex; gap:8px;">
+              <button class="primary" id="btnCriarModulo" style="flex:1;">Criar módulo</button>
+              <button id="btnCancelarEdicaoModulo" style="display:none;">Cancelar</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2 style="font-size:14px;">Seus módulos</h2>
+            <div id="listaModulos"><p class="small">Carregando...</p></div>
+          </div>
+        </div>
+
+        <div id="painelModulo">
+          <div class="card">
+            <p class="muted" style="margin:0;">Selecione um módulo ao lado (ou crie um novo) pra gerenciar o conteúdo dele.</p>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="card" id="cardSemModulo" style="display:none;">
+        <h2>Conteúdos sem módulo atribuído</h2>
+        <p class="small" style="margin-top:-6px;">Conteúdos criados antes da organização por módulos. Atribua um módulo a cada um.</p>
+        <div id="listaSemModulo"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { firebaseConfig } from "./firebase-config.js";
+    import { renderSidebar } from "./sidebar.js";
+    import { criarNotificacao } from "./helpers.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+    import {
+      getFirestore, doc, getDoc, setDoc, collection, getDocs, addDoc,
+      updateDoc, deleteDoc, arrayUnion, arrayRemove, query, where
+    } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    let modulosCache = [];
+    let conteudosCache = [];
+    let alunosCache = [];
+    let moduloSelecionadoId = new URLSearchParams(window.location.search).get("modulo");
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { window.location.href = "index.html"; return; }
+      const userSnap = await getDoc(doc(db, "usuarios", user.uid));
+      if (!userSnap.exists() || userSnap.data().papel !== "admin") {
+        window.location.href = "index.html"; return;
+      }
+
+      renderSidebar({ activeKey: "modulos", role: "admin", nomeUsuario: userSnap.data().nome });
+      document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
+
+      await carregarTudo();
+    });
+
+    async function carregarTudo() {
+      const [modulosSnap, conteudosSnap, usuariosSnap] = await Promise.all([
+        getDocs(collection(db, "modulos")),
+        getDocs(collection(db, "conteudos")),
+        getDocs(collection(db, "usuarios"))
+      ]);
+      modulosCache = modulosSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+      conteudosCache = conteudosSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      alunosCache = usuariosSnap.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.papel === "aluno");
+
+      renderListaModulos();
+      renderSemModulo();
+      renderPainelModulo();
+    }
+
+    document.getElementById("btnCriarModulo").addEventListener("click", async () => {
+      const nome = document.getElementById("nomeModulo").value.trim();
+      const descricao = document.getElementById("descModulo").value.trim();
+      const nivel = document.getElementById("nivelModulo").value.trim();
+      const ordem = parseInt(document.getElementById("ordemModulo").value) || 0;
+      const idEditando = document.getElementById("moduloEditandoId").value;
+      if (!nome) { alert("Dê um nome ao módulo."); return; }
+
+      if (idEditando) {
+        await updateDoc(doc(db, "modulos", idEditando), { nome, descricao, nivel, ordem });
+        cancelarEdicaoModulo();
+      } else {
+        const ref = await addDoc(collection(db, "modulos"), { nome, descricao, nivel, ordem, disponivel: true });
+        moduloSelecionadoId = ref.id;
+        document.getElementById("nomeModulo").value = "";
+        document.getElementById("descModulo").value = "";
+        document.getElementById("nivelModulo").value = "";
+        document.getElementById("ordemModulo").value = "";
+      }
+      await carregarTudo();
+    });
+
+    document.getElementById("btnCancelarEdicaoModulo").addEventListener("click", cancelarEdicaoModulo);
+
+    function cancelarEdicaoModulo() {
+      document.getElementById("moduloEditandoId").value = "";
+      document.getElementById("tituloFormModulo").textContent = "Novo módulo";
+      document.getElementById("nomeModulo").value = "";
+      document.getElementById("descModulo").value = "";
+      document.getElementById("nivelModulo").value = "";
+      document.getElementById("ordemModulo").value = "";
+      document.getElementById("btnCriarModulo").textContent = "Criar módulo";
+      document.getElementById("btnCancelarEdicaoModulo").style.display = "none";
+    }
+
+    function editarModulo(modulo) {
+      document.getElementById("moduloEditandoId").value = modulo.id;
+      document.getElementById("tituloFormModulo").textContent = `Editando: ${modulo.nome}`;
+      document.getElementById("nomeModulo").value = modulo.nome || "";
+      document.getElementById("descModulo").value = modulo.descricao || "";
+      document.getElementById("nivelModulo").value = modulo.nivel || "";
+      document.getElementById("ordemModulo").value = modulo.ordem || 0;
+      document.getElementById("btnCriarModulo").textContent = "Salvar alterações";
+      document.getElementById("btnCancelarEdicaoModulo").style.display = "inline-block";
+    }
+
+    async function excluirModulo(modulo) {
+      const confirmar = confirm(`Excluir o módulo "${modulo.nome}" e TODOS os conteúdos/exercícios dentro dele? Essa ação não pode ser desfeita.`);
+      if (!confirmar) return;
+
+      const conteudosDoModulo = conteudosCache.filter(c => c.moduloId === modulo.id);
+      for (const c of conteudosDoModulo) {
+        const exSnap = await getDocs(query(collection(db, "exercicios"), where("conteudoId", "==", c.id)));
+        for (const exDoc of exSnap.docs) await deleteDoc(doc(db, "exercicios", exDoc.id));
+
+        for (const aluno of alunosCache) {
+          if ((aluno.conteudosLiberados || []).includes(c.id) || (aluno.conteudosConcluidos || []).includes(c.id)) {
+            await updateDoc(doc(db, "usuarios", aluno.uid), {
+              conteudosLiberados: arrayRemove(c.id),
+              conteudosConcluidos: arrayRemove(c.id)
+            });
+          }
+        }
+        await deleteDoc(doc(db, "conteudos", c.id));
+      }
+
+      await deleteDoc(doc(db, "modulos", modulo.id));
+      if (moduloSelecionadoId === modulo.id) moduloSelecionadoId = null;
+      await carregarTudo();
+    }
+
+    function renderListaModulos() {
+      const container = document.getElementById("listaModulos");
+      if (modulosCache.length === 0) {
+        container.innerHTML = `<p class="small">Nenhum módulo criado ainda.</p>`;
+        return;
+      }
+      container.innerHTML = modulosCache.map(m => `
+        <div class="content-item ${m.id === moduloSelecionadoId ? 'active' : ''}" data-id="${m.id}" style="margin-bottom:6px; justify-content:space-between;">
+          <span style="flex:1; cursor:pointer;" data-selecionar="${m.id}">${m.nome}</span>
+          <button data-editar-modulo="${m.id}" style="padding:4px 8px; font-size:12px;">✏️</button>
+          <button data-excluir-modulo="${m.id}" style="padding:4px 8px; font-size:12px; color:var(--red-dark);">🗑️</button>
+        </div>
+      `).join("");
+      container.querySelectorAll("[data-selecionar]").forEach(el => {
+        el.addEventListener("click", () => {
+          moduloSelecionadoId = el.dataset.selecionar;
+          renderListaModulos();
+          renderPainelModulo();
+        });
+      });
+      container.querySelectorAll("[data-editar-modulo]").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          editarModulo(modulosCache.find(m => m.id === btn.dataset.editarModulo));
+        });
+      });
+      container.querySelectorAll("[data-excluir-modulo]").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          excluirModulo(modulosCache.find(m => m.id === btn.dataset.excluirModulo));
+        });
+      });
+    }
+
+    function renderSemModulo() {
+      const semModulo = conteudosCache.filter(c => !c.moduloId);
+      const card = document.getElementById("cardSemModulo");
+      if (semModulo.length === 0) { card.style.display = "none"; return; }
+      card.style.display = "block";
+
+      const opcoesModulos = modulosCache.map(m => `<option value="${m.id}">${m.nome}</option>`).join("");
+      document.getElementById("listaSemModulo").innerHTML = semModulo.map(c => `
+        <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border);">
+          <span style="flex:1; font-size:14px;">${c.titulo}</span>
+          <select data-conteudo="${c.id}" style="width:200px; margin:0;">
+            <option value="">Atribuir a um módulo...</option>
+            ${opcoesModulos}
+          </select>
+        </div>
+      `).join("");
+
+      document.querySelectorAll("#listaSemModulo select").forEach(sel => {
+        sel.addEventListener("change", async (e) => {
+          const conteudoId = e.target.dataset.conteudo;
+          const moduloId = e.target.value;
+          if (!moduloId) return;
+          await updateDoc(doc(db, "conteudos", conteudoId), { moduloId });
+          await carregarTudo();
+        });
+      });
+    }
+
+    function renderPainelModulo() {
+      const painel = document.getElementById("painelModulo");
+      if (!moduloSelecionadoId) {
+        painel.innerHTML = `<div class="card"><p class="muted" style="margin:0;">Selecione um módulo ao lado.</p></div>`;
+        return;
+      }
+      const modulo = modulosCache.find(m => m.id === moduloSelecionadoId);
+      if (!modulo) {
+        painel.innerHTML = `<div class="card"><p class="muted" style="margin:0;">Módulo não encontrado.</p></div>`;
+        return;
+      }
+      const conteudosDoModulo = conteudosCache.filter(c => c.moduloId === moduloSelecionadoId).sort((a,b) => (a.ordem||0)-(b.ordem||0));
+
+      painel.innerHTML = `
+        <div class="card">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <h2 style="margin:0;">${modulo.nome}</h2>
+            <label style="display:flex; align-items:center; gap:6px; font-size:13px; margin:0;">
+              <input type="checkbox" id="chkDisponivel" ${modulo.disponivel !== false ? "checked" : ""} style="width:auto;" />
+              Disponível (desmarque pra "Em breve")
+            </label>
+          </div>
+          <p class="small">${modulo.descricao || ""} ${modulo.nivel ? "· Nível: " + modulo.nivel : ""}</p>
+        </div>
+
+        <div class="card">
+          <h2 style="font-size:15px;">Conteúdos deste módulo</h2>
+          <div id="listaConteudosModulo"></div>
+        </div>
+
+        <div class="card">
+          <h2 style="font-size:15px;" id="tituloFormConteudo">Novo conteúdo neste módulo</h2>
+          <input type="hidden" id="conteudoEditandoId" value="" />
+          <label>Tipo</label>
+          <select id="tipoConteudo">
+            <option value="video">Vídeo (YouTube)</option>
+            <option value="pdf">PDF</option>
+            <option value="imagem">Imagem</option>
+            <option value="link">Link externo</option>
+            <option value="texto">Texto</option>
+            <option value="redacao">Redação (correção manual)</option>
+            <option value="resposta_aberta">Resposta aberta (correção manual)</option>
+          </select>
+
+          <label>Título</label>
+          <input type="text" id="tituloAula" placeholder="Ex: Past simple: verbos irregulares" />
+
+          <div id="camposEspecificos"></div>
+
+          <label>Ordem</label>
+          <input type="text" id="ordemAula" placeholder="1" />
+          <div style="display:flex; gap:8px;">
+            <button class="primary" id="btnSalvarAula" style="flex:1;">Salvar conteúdo</button>
+            <button id="btnCancelarEdicaoConteudo" style="display:none;">Cancelar</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 style="font-size:15px;" id="tituloFormExercicio">Novo exercício</h2>
+          <input type="hidden" id="exercicioEditandoId" value="" />
+          <label>Aula vinculada</label>
+          <select id="selectAulaExercicio">
+            ${conteudosDoModulo.map(c => `<option value="${c.id}">${c.titulo}</option>`).join("")}
+          </select>
+          <label>Pergunta</label>
+          <input type="text" id="pergunta" placeholder="Yesterday I ___ (go) to the market." />
+          <label>Alternativas (separadas por vírgula)</label>
+          <input type="text" id="alternativas" placeholder="went, goed, going" />
+          <label>Resposta certa (idêntica a uma das alternativas)</label>
+          <input type="text" id="respostaCerta" placeholder="went" />
+          <div style="display:flex; gap:8px;">
+            <button class="primary" id="btnSalvarExercicio" style="flex:1;">Salvar exercício</button>
+            <button id="btnCancelarEdicaoExercicio" style="display:none;">Cancelar</button>
+          </div>
+          <div id="listaExerciciosAula" style="margin-top:16px;"></div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+            <h2 style="margin:0; font-size:15px;">Liberar conteúdo por aluno</h2>
+            <button class="secondary" id="btnLiberarModuloInteiro">Liberar módulo inteiro</button>
+          </div>
+          <div id="matrizLiberacao"></div>
+        </div>
+      `;
+
+      renderListaConteudosModulo(conteudosDoModulo);
+      renderCamposEspecificos("video");
+      document.getElementById("tipoConteudo").addEventListener("change", (e) => renderCamposEspecificos(e.target.value));
+      document.getElementById("selectAulaExercicio").addEventListener("change", () => renderListaExerciciosAula());
+
+      document.getElementById("chkDisponivel").addEventListener("change", async (e) => {
+        await updateDoc(doc(db, "modulos", moduloSelecionadoId), { disponivel: e.target.checked });
+        const idx = modulosCache.findIndex(m => m.id === moduloSelecionadoId);
+        if (idx > -1) modulosCache[idx].disponivel = e.target.checked;
+      });
+
+      document.getElementById("btnSalvarAula").addEventListener("click", async () => {
+        const titulo = document.getElementById("tituloAula").value.trim();
+        const tipo = document.getElementById("tipoConteudo").value;
+        const ordem = parseInt(document.getElementById("ordemAula").value) || 0;
+        const idEditando = document.getElementById("conteudoEditandoId").value;
+
+        if (!titulo) { alert("Dê um título ao conteúdo."); return; }
+
+        const dados = { titulo, ordem, moduloId: moduloSelecionadoId, tipo };
+
+        if (tipo === "video") {
+          const valor = document.getElementById("campoYoutube").value.trim();
+          if (!valor) { alert("Cole o link ou ID do vídeo."); return; }
+          dados.youtubeId = extrairIdYoutube(valor);
+        } else if (tipo === "pdf" || tipo === "imagem" || tipo === "link") {
+          const url = document.getElementById("campoUrl").value.trim();
+          if (!url) { alert("Cole a URL."); return; }
+          dados.url = url;
+        } else if (tipo === "texto") {
+          const texto = document.getElementById("campoTexto").value.trim();
+          if (!texto) { alert("Escreva o texto."); return; }
+          dados.texto = texto;
+        } else if (tipo === "redacao" || tipo === "resposta_aberta") {
+          const enunciado = document.getElementById("campoEnunciado").value.trim();
+          if (!enunciado) { alert("Escreva o enunciado da atividade."); return; }
+          dados.enunciado = enunciado;
+        }
+
+        if (idEditando) {
+          await updateDoc(doc(db, "conteudos", idEditando), dados);
+          alert("Conteúdo atualizado!");
+        } else {
+          await addDoc(collection(db, "conteudos"), dados);
+          alert("Conteúdo salvo!");
+        }
+
+        cancelarEdicaoConteudo();
+        await carregarTudo();
+      });
+
+      document.getElementById("btnCancelarEdicaoConteudo").addEventListener("click", cancelarEdicaoConteudo);
+
+      function cancelarEdicaoConteudo() {
+        document.getElementById("conteudoEditandoId").value = "";
+        document.getElementById("tituloFormConteudo").textContent = "Novo conteúdo neste módulo";
+        document.getElementById("tituloAula").value = "";
+        document.getElementById("ordemAula").value = "";
+        document.getElementById("tipoConteudo").value = "video";
+        document.getElementById("tipoConteudo").disabled = false;
+        renderCamposEspecificos("video");
+        document.getElementById("btnSalvarAula").textContent = "Salvar conteúdo";
+        document.getElementById("btnCancelarEdicaoConteudo").style.display = "none";
+      }
+
+      function editarConteudo(conteudo) {
+        document.getElementById("conteudoEditandoId").value = conteudo.id;
+        document.getElementById("tituloFormConteudo").textContent = `Editando: ${conteudo.titulo}`;
+        document.getElementById("tituloAula").value = conteudo.titulo;
+        document.getElementById("ordemAula").value = conteudo.ordem || 0;
+        document.getElementById("tipoConteudo").value = conteudo.tipo || "video";
+        document.getElementById("tipoConteudo").disabled = true; // evita trocar de tipo no meio da edição
+        renderCamposEspecificos(conteudo.tipo || "video");
+
+        if (conteudo.tipo === "video") document.getElementById("campoYoutube").value = conteudo.youtubeId || "";
+        else if (["pdf", "imagem", "link"].includes(conteudo.tipo)) document.getElementById("campoUrl").value = conteudo.url || "";
+        else if (conteudo.tipo === "texto") document.getElementById("campoTexto").value = conteudo.texto || "";
+        else if (["redacao", "resposta_aberta"].includes(conteudo.tipo)) document.getElementById("campoEnunciado").value = conteudo.enunciado || "";
+
+        document.getElementById("btnSalvarAula").textContent = "Salvar alterações";
+        document.getElementById("btnCancelarEdicaoConteudo").style.display = "inline-block";
+        window.scrollTo({ top: document.getElementById("tituloFormConteudo").offsetTop - 20, behavior: "smooth" });
+      }
+
+      async function excluirConteudo(conteudo) {
+        const confirmar = confirm(`Excluir "${conteudo.titulo}"? Isso também remove os exercícios ligados a ele. Essa ação não pode ser desfeita.`);
+        if (!confirmar) return;
+
+        const exSnap = await getDocs(query(collection(db, "exercicios"), where("conteudoId", "==", conteudo.id)));
+        for (const exDoc of exSnap.docs) await deleteDoc(doc(db, "exercicios", exDoc.id));
+
+        for (const aluno of alunosCache) {
+          if ((aluno.conteudosLiberados || []).includes(conteudo.id) || (aluno.conteudosConcluidos || []).includes(conteudo.id)) {
+            await updateDoc(doc(db, "usuarios", aluno.uid), {
+              conteudosLiberados: arrayRemove(conteudo.id),
+              conteudosConcluidos: arrayRemove(conteudo.id)
+            });
+          }
+        }
+
+        await deleteDoc(doc(db, "conteudos", conteudo.id));
+        await carregarTudo();
+      }
+
+      function renderListaConteudosModulo(lista) {
+        const container = document.getElementById("listaConteudosModulo");
+        if (lista.length === 0) {
+          container.innerHTML = `<p class="small">Nenhum conteúdo cadastrado neste módulo ainda.</p>`;
+          return;
+        }
+        const rotulos = { video: "Vídeo", pdf: "PDF", imagem: "Imagem", link: "Link", texto: "Texto", redacao: "Redação", resposta_aberta: "Resposta aberta" };
+        container.innerHTML = lista.map(c => `
+          <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border);">
+            <span style="flex:1; font-size:14px;">${c.ordem ? c.ordem + ". " : ""}${c.titulo} <span class="small">(${rotulos[c.tipo] || c.tipo || "vídeo"})</span></span>
+            <button data-editar="${c.id}" style="padding:6px 10px;">Editar</button>
+            <button data-excluir="${c.id}" style="padding:6px 10px; color:var(--red-dark);">Excluir</button>
+          </div>
+        `).join("");
+
+        container.querySelectorAll("[data-editar]").forEach(btn => {
+          btn.addEventListener("click", () => editarConteudo(lista.find(c => c.id === btn.dataset.editar)));
+        });
+        container.querySelectorAll("[data-excluir]").forEach(btn => {
+          btn.addEventListener("click", () => excluirConteudo(lista.find(c => c.id === btn.dataset.excluir)));
+        });
+      }
+
+      document.getElementById("btnSalvarExercicio").addEventListener("click", async () => {
+        const conteudoId = document.getElementById("selectAulaExercicio").value;
+        const pergunta = document.getElementById("pergunta").value.trim();
+        const alternativas = document.getElementById("alternativas").value.split(",").map(s => s.trim()).filter(Boolean);
+        const respostaCerta = document.getElementById("respostaCerta").value.trim();
+        const idEditando = document.getElementById("exercicioEditandoId").value;
+
+        if (!conteudoId || !pergunta || alternativas.length < 2 || !respostaCerta) {
+          alert("Preencha todos os campos (mínimo 2 alternativas)."); return;
+        }
+        if (!alternativas.includes(respostaCerta)) {
+          alert("A resposta certa precisa ser idêntica a uma das alternativas digitadas."); return;
+        }
+
+        if (idEditando) {
+          await updateDoc(doc(db, "exercicios", idEditando), { conteudoId, pergunta, alternativas, respostaCerta });
+          alert("Exercício atualizado!");
+        } else {
+          await addDoc(collection(db, "exercicios"), { conteudoId, pergunta, alternativas, respostaCerta });
+          alert("Exercício salvo!");
+        }
+
+        cancelarEdicaoExercicio();
+        await renderListaExerciciosAula();
+      });
+
+      document.getElementById("btnCancelarEdicaoExercicio").addEventListener("click", cancelarEdicaoExercicio);
+
+      function cancelarEdicaoExercicio() {
+        document.getElementById("exercicioEditandoId").value = "";
+        document.getElementById("tituloFormExercicio").textContent = "Novo exercício";
+        document.getElementById("pergunta").value = "";
+        document.getElementById("alternativas").value = "";
+        document.getElementById("respostaCerta").value = "";
+        document.getElementById("btnSalvarExercicio").textContent = "Salvar exercício";
+        document.getElementById("btnCancelarEdicaoExercicio").style.display = "none";
+      }
+
+      function editarExercicio(ex, id) {
+        document.getElementById("exercicioEditandoId").value = id;
+        document.getElementById("tituloFormExercicio").textContent = "Editando exercício";
+        document.getElementById("selectAulaExercicio").value = ex.conteudoId;
+        document.getElementById("pergunta").value = ex.pergunta;
+        document.getElementById("alternativas").value = ex.alternativas.join(", ");
+        document.getElementById("respostaCerta").value = ex.respostaCerta;
+        document.getElementById("btnSalvarExercicio").textContent = "Salvar alterações";
+        document.getElementById("btnCancelarEdicaoExercicio").style.display = "inline-block";
+      }
+
+      async function excluirExercicio(id) {
+        if (!confirm("Excluir este exercício? Essa ação não pode ser desfeita.")) return;
+        await deleteDoc(doc(db, "exercicios", id));
+        await renderListaExerciciosAula();
+      }
+
+      async function renderListaExerciciosAula() {
+        const conteudoId = document.getElementById("selectAulaExercicio").value;
+        const container = document.getElementById("listaExerciciosAula");
+        if (!conteudoId) { container.innerHTML = ""; return; }
+
+        const exSnap = await getDocs(query(collection(db, "exercicios"), where("conteudoId", "==", conteudoId)));
+        if (exSnap.empty) {
+          container.innerHTML = `<p class="small">Nenhum exercício cadastrado pra essa aula ainda.</p>`;
+          return;
+        }
+
+        container.innerHTML = `<p class="small" style="margin-bottom:6px;">Exercícios cadastrados:</p>` + exSnap.docs.map(d => `
+          <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border);">
+            <span style="flex:1; font-size:13px;">${d.data().pergunta}</span>
+            <button data-editar-ex="${d.id}" style="padding:6px 10px;">Editar</button>
+            <button data-excluir-ex="${d.id}" style="padding:6px 10px; color:var(--red-dark);">Excluir</button>
+          </div>
+        `).join("");
+
+        container.querySelectorAll("[data-editar-ex]").forEach(btn => {
+          const exDoc = exSnap.docs.find(d => d.id === btn.dataset.editarEx);
+          btn.addEventListener("click", () => editarExercicio(exDoc.data(), exDoc.id));
+        });
+        container.querySelectorAll("[data-excluir-ex]").forEach(btn => {
+          btn.addEventListener("click", () => excluirExercicio(btn.dataset.excluirEx));
+        });
+      }
+
+      renderListaExerciciosAula();
+
+      document.getElementById("btnLiberarModuloInteiro").addEventListener("click", async () => {
+        const idsConteudo = conteudosDoModulo.map(c => c.id);
+        if (idsConteudo.length === 0) { alert("Este módulo ainda não tem conteúdo."); return; }
+        for (const aluno of alunosCache) {
+          await updateDoc(doc(db, "usuarios", aluno.uid), { conteudosLiberados: arrayUnion(...idsConteudo) });
+          await criarNotificacao(db, {
+            userId: aluno.uid, tipo: "liberacao",
+            mensagem: `O módulo "${modulo.nome}" foi liberado pra você.`,
+            link: `modulo.html?id=${moduloSelecionadoId}`
+          });
+        }
+        await carregarTudo();
+        alert("Módulo liberado para todos os alunos!");
+      });
+
+      renderMatrizLiberacao(conteudosDoModulo);
+    }
+
+    function renderCamposEspecificos(tipo) {
+      const container = document.getElementById("camposEspecificos");
+      if (tipo === "video") {
+        container.innerHTML = `
+          <label>Link ou ID do vídeo no YouTube</label>
+          <input type="text" id="campoYoutube" placeholder="Cole a URL inteira ou só o código" />
+        `;
+      } else if (tipo === "pdf") {
+        container.innerHTML = `
+          <label>URL do PDF</label>
+          <input type="text" id="campoUrl" placeholder="Link direto pro arquivo PDF" />
+        `;
+      } else if (tipo === "imagem") {
+        container.innerHTML = `
+          <label>URL da imagem</label>
+          <input type="text" id="campoUrl" placeholder="Link direto pra imagem" />
+        `;
+      } else if (tipo === "link") {
+        container.innerHTML = `
+          <label>URL do link externo</label>
+          <input type="text" id="campoUrl" placeholder="https://..." />
+        `;
+      } else if (tipo === "texto") {
+        container.innerHTML = `
+          <label>Texto</label>
+          <textarea id="campoTexto" rows="5" placeholder="Conteúdo em texto"></textarea>
+        `;
+      } else if (tipo === "redacao" || tipo === "resposta_aberta") {
+        container.innerHTML = `
+          <label>Enunciado da atividade</label>
+          <textarea id="campoEnunciado" rows="3" placeholder="Ex: Write 3 sentences about your weekend."></textarea>
+        `;
+      }
+    }
+
+    function extrairIdYoutube(valor) {
+      // Aceita: URL completa (youtu.be/ID ou watch?v=ID) ou apenas o código.
+      try {
+        if (valor.includes("youtu.be/")) {
+          return valor.split("youtu.be/")[1].split(/[?&]/)[0];
+        }
+        if (valor.includes("v=")) {
+          return valor.split("v=")[1].split("&")[0];
+        }
+        return valor.trim();
+      } catch {
+        return valor.trim();
+      }
+    }
+
+    function renderMatrizLiberacao(conteudosDoModulo) {
+      const container = document.getElementById("matrizLiberacao");
+      if (alunosCache.length === 0) {
+        container.innerHTML = `<p class="small">Nenhum aluno cadastrado ainda.</p>`;
+        return;
+      }
+      if (conteudosDoModulo.length === 0) {
+        container.innerHTML = `<p class="small">Cadastre uma aula neste módulo primeiro.</p>`;
+        return;
+      }
+
+      let html = `<table><thead><tr><th>Aluno</th>`;
+      conteudosDoModulo.forEach(c => html += `<th>${c.titulo}</th>`);
+      html += `</tr></thead><tbody>`;
+      alunosCache.forEach(aluno => {
+        html += `<tr><td>${aluno.nome}</td>`;
+        conteudosDoModulo.forEach(c => {
+          const liberado = (aluno.conteudosLiberados || []).includes(c.id);
+          html += `<td style="text-align:center;">
+            <input type="checkbox" data-uid="${aluno.uid}" data-conteudo="${c.id}" ${liberado ? "checked" : ""} />
+          </td>`;
+        });
+        html += `</tr>`;
+      });
+      html += `</tbody></table>`;
+      container.innerHTML = html;
+
+      container.querySelectorAll("input[type=checkbox]").forEach(cb => {
+        cb.addEventListener("change", async (e) => {
+          const uid = e.target.dataset.uid;
+          const conteudoId = e.target.dataset.conteudo;
+          const ref = doc(db, "usuarios", uid);
+          if (e.target.checked) {
+            await updateDoc(ref, { conteudosLiberados: arrayUnion(conteudoId) });
+            const conteudo = conteudosDoModulo.find(c => c.id === conteudoId);
+            await criarNotificacao(db, {
+              userId: uid, tipo: "liberacao",
+              mensagem: `Novo conteúdo liberado: ${conteudo ? conteudo.titulo : ""}`,
+              link: `modulo.html?id=${moduloSelecionadoId}`
+            });
+          } else {
+            await updateDoc(ref, { conteudosLiberados: arrayRemove(conteudoId) });
+          }
+
+          const aluno = alunosCache.find(a => a.uid === uid);
+          if (aluno) {
+            aluno.conteudosLiberados = aluno.conteudosLiberados || [];
+            if (e.target.checked) aluno.conteudosLiberados.push(conteudoId);
+            else aluno.conteudosLiberados = aluno.conteudosLiberados.filter(id => id !== conteudoId);
+          }
+        });
+      });
+    }
+  </script>
+</body>
+</html>
