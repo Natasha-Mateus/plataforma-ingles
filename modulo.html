@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Módulo - MD English</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="main-area">
+      <p class="small"><a href="modulos.html" style="color:var(--navy);">← Meus Módulos</a></p>
+      <h1 id="tituloModulo">Módulo</h1>
+      <p class="muted" id="descModulo"></p>
+
+      <div style="display:grid; grid-template-columns: 240px 1fr; gap: 20px;">
+        <div>
+          <h2 style="font-size:13px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.03em;">Conteúdo</h2>
+          <div class="content-list" id="listaConteudos">
+            <p class="small">Carregando...</p>
+          </div>
+        </div>
+        <div id="areaConteudo">
+          <p class="muted">Selecione um item ao lado.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { firebaseConfig } from "./firebase-config.js";
+    import { renderSidebar } from "./sidebar.js";
+    import { contarNaoLidas, liberarProximoSeSequencial } from "./helpers.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+    import {
+      getFirestore, doc, getDoc, collection, getDocs, query, where, addDoc, updateDoc, arrayUnion
+    } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const params = new URLSearchParams(window.location.search);
+    const moduloId = params.get("id");
+
+    let usuarioAtual = null;
+    let liberados = [];
+    let concluidos = [];
+    let conteudosDoModulo = [];
+    let respostasAbertasDoAluno = []; // { conteudoId, status, nota, feedback }
+    let moduloAtual = null;
+
+    const TIPOS_MANUAL = ["redacao", "resposta_aberta"];
+
+    if (!moduloId) window.location.href = "modulos.html";
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { window.location.href = "index.html"; return; }
+
+      const userSnap = await getDoc(doc(db, "usuarios", user.uid));
+      if (!userSnap.exists()) { window.location.href = "index.html"; return; }
+      usuarioAtual = { uid: user.uid, ...userSnap.data() };
+      if (usuarioAtual.papel === "admin") { window.location.href = "admin-dashboard.html"; return; }
+
+      renderSidebar({ activeKey: "modulos", role: "aluno", nomeUsuario: usuarioAtual.nome, naoLidas: await contarNaoLidas(db, user.uid) });
+      document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
+
+      liberados = usuarioAtual.conteudosLiberados || [];
+      concluidos = usuarioAtual.conteudosConcluidos || [];
+
+      const moduloSnap = await getDoc(doc(db, "modulos", moduloId));
+      if (!moduloSnap.exists()) { window.location.href = "modulos.html"; return; }
+      moduloAtual = moduloSnap.data();
+      document.getElementById("tituloModulo").textContent = moduloAtual.nome;
+      document.getElementById("descModulo").textContent = moduloAtual.descricao || "";
+
+      const conteudosSnap = await getDocs(query(collection(db, "conteudos"), where("moduloId", "==", moduloId)));
+      conteudosDoModulo = conteudosSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+
+      const respostasSnap = await getDocs(query(collection(db, "respostasAbertas"), where("userId", "==", usuarioAtual.uid)));
+      respostasAbertasDoAluno = respostasSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      renderLista();
+    });
+
+    function statusDoConteudo(c) {
+      if (!liberados.includes(c.id)) return "bloqueado";
+      if (TIPOS_MANUAL.includes(c.tipo)) {
+        const submissao = respostasAbertasDoAluno.find(r => r.conteudoId === c.id);
+        if (!submissao) return "disponivel";
+        if (submissao.status === "corrigida") return "concluido";
+        return "aguardando";
+      }
+      return concluidos.includes(c.id) ? "concluido" : "disponivel";
+    }
+
+    function iconeStatus(status) {
+      if (status === "concluido") return "✓";
+      if (status === "aguardando") return "⏳";
+      if (status === "bloqueado") return "🔒";
+      return "▶";
+    }
+
+    function renderLista() {
+      const lista = document.getElementById("listaConteudos");
+      lista.innerHTML = "";
+
+      conteudosDoModulo.forEach(c => {
+        const status = statusDoConteudo(c);
+        const item = document.createElement("div");
+        item.className = "content-item" + (status === "bloqueado" ? " locked" : "");
+        item.dataset.id = c.id;
+        item.innerHTML = `<span>${iconeStatus(status)} ${c.titulo}</span>`;
+        if (status !== "bloqueado") item.addEventListener("click", () => abrirConteudo(c, item));
+        lista.appendChild(item);
+      });
+    }
+
+    async function abrirConteudo(conteudo, itemEl) {
+      document.querySelectorAll(".content-item").forEach(el => el.classList.remove("active"));
+      itemEl.classList.add("active");
+
+      const area = document.getElementById("areaConteudo");
+      area.innerHTML = `<h2>${conteudo.titulo}</h2><div id="corpoConteudo"></div>`;
+      const corpo = document.getElementById("corpoConteudo");
+
+      if (conteudo.tipo === "pdf") {
+        corpo.innerHTML = `
+          <div class="card" style="text-align:center;">
+            <p class="muted" style="margin-bottom:12px;">Documento em PDF</p>
+            <a href="${conteudo.url}" target="_blank" rel="noopener">
+              <button class="secondary">Abrir / baixar PDF</button>
+            </a>
+          </div>
+          <div id="areaExercicio"></div>
+        `;
+        await marcarConcluidoSeSemExercicio(conteudo);
+      } else if (conteudo.tipo === "imagem") {
+        corpo.innerHTML = `
+          <img src="${conteudo.url}" alt="${conteudo.titulo}" style="max-width:100%; border-radius:10px; margin-bottom:16px;" />
+          <div id="areaExercicio"></div>
+        `;
+        await marcarConcluidoSeSemExercicio(conteudo);
+      } else if (conteudo.tipo === "link") {
+        corpo.innerHTML = `
+          <div class="card" style="text-align:center;">
+            <p class="muted" style="margin-bottom:12px;">Este conteúdo abre em uma página externa</p>
+            <a href="${conteudo.url}" target="_blank" rel="noopener">
+              <button class="secondary">Abrir link</button>
+            </a>
+          </div>
+          <div id="areaExercicio"></div>
+        `;
+        await marcarConcluidoSeSemExercicio(conteudo);
+      } else if (conteudo.tipo === "texto") {
+        corpo.innerHTML = `
+          <div class="card">${(conteudo.texto || "").replace(/\n/g, "<br>")}</div>
+          <div id="areaExercicio"></div>
+        `;
+        await marcarConcluidoSeSemExercicio(conteudo);
+      } else if (TIPOS_MANUAL.includes(conteudo.tipo)) {
+        renderAtividadeManual(conteudo, corpo);
+        return;
+      } else {
+        // vídeo (padrão / retrocompatível)
+        corpo.innerHTML = `
+          <div class="video-frame">
+            <iframe src="https://www.youtube.com/embed/${conteudo.youtubeId}?rel=0&modestbranding=1"
+              allow="accelerometer; autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+          </div>
+          <div id="areaExercicio"></div>
+        `;
+      }
+
+      await renderExercicioSeHouver(conteudo);
+    }
+
+    async function marcarConcluidoSeSemExercicio(conteudo) {
+      // PDF/imagem/link/texto sem exercício vinculado: mostra botão de concluir depois de verificar se há exercício.
+      const exSnap = await getDocs(query(collection(db, "exercicios"), where("conteudoId", "==", conteudo.id)));
+      if (!exSnap.empty) return; // vai ter exercício, deixa o fluxo normal cuidar da conclusão
+
+      const jaConcluido = concluidos.includes(conteudo.id);
+      const areaEx = document.getElementById("areaExercicio");
+      if (jaConcluido) {
+        areaEx.innerHTML = `<p class="small">✓ Você já marcou este conteúdo como concluído.</p>`;
+        return;
+      }
+      areaEx.innerHTML = `<button class="secondary" id="btnMarcarConcluido">Marcar como concluído</button>`;
+      document.getElementById("btnMarcarConcluido").addEventListener("click", async () => {
+        await updateDoc(doc(db, "usuarios", usuarioAtual.uid), { conteudosConcluidos: arrayUnion(conteudo.id) });
+        concluidos = [...concluidos, conteudo.id];
+        const desbloqueado = await liberarProximoSeSequencial(db, { modulo: moduloAtual, moduloId, conteudosDoModulo, conteudoAtualId: conteudo.id, aluno: { uid: usuarioAtual.uid, conteudosLiberados: liberados } });
+        if (desbloqueado) liberados = [...liberados, desbloqueado];
+        renderLista();
+        document.querySelectorAll(".content-item").forEach(el => { if (el.dataset.id === conteudo.id) el.classList.add("active"); });
+        areaEx.innerHTML = `<p class="small">✓ Concluído!</p>`;
+      });
+    }
+
+    async function renderExercicioSeHouver(conteudo) {
+      const exSnap = await getDocs(query(collection(db, "exercicios"), where("conteudoId", "==", conteudo.id)));
+      const areaEx = document.getElementById("areaExercicio");
+      if (exSnap.empty) return;
+
+      exSnap.forEach(exDoc => {
+        const ex = exDoc.data();
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `<p style="font-weight:500; margin:0 0 12px;">${ex.pergunta}</p>`;
+
+        ex.alternativas.forEach(alt => {
+          const opt = document.createElement("div");
+          opt.className = "option";
+          opt.textContent = alt;
+          opt.addEventListener("click", async () => {
+            const acertou = alt === ex.respostaCerta;
+            card.querySelectorAll(".option").forEach(o => {
+              o.style.pointerEvents = "none";
+              if (o.textContent === ex.respostaCerta) o.classList.add("correct");
+              else if (o === opt) o.classList.add("wrong");
+            });
+            const feedback = document.createElement("p");
+            feedback.className = "feedback " + (acertou ? "ok" : "no");
+            feedback.textContent = acertou ? "Certo! 🎉" : `Errado. A resposta certa era "${ex.respostaCerta}".`;
+            card.appendChild(feedback);
+
+            await addDoc(collection(db, "respostasAluno"), {
+              userId: usuarioAtual.uid, exercicioId: exDoc.id, respostaDada: alt, acertou, data: new Date().toISOString()
+            });
+
+            if (acertou) {
+              await updateDoc(doc(db, "usuarios", usuarioAtual.uid), { conteudosConcluidos: arrayUnion(conteudo.id) });
+              concluidos = [...concluidos, conteudo.id];
+              const desbloqueado = await liberarProximoSeSequencial(db, { modulo: moduloAtual, moduloId, conteudosDoModulo, conteudoAtualId: conteudo.id, aluno: { uid: usuarioAtual.uid, conteudosLiberados: liberados } });
+              if (desbloqueado) liberados = [...liberados, desbloqueado];
+              renderLista();
+              document.querySelectorAll(".content-item").forEach(el => { if (el.dataset.id === conteudo.id) el.classList.add("active"); });
+            }
+          });
+          card.appendChild(opt);
+        });
+        areaEx.appendChild(card);
+      });
+    }
+
+    function renderAtividadeManual(conteudo, corpo) {
+      const submissao = respostasAbertasDoAluno.find(r => r.conteudoId === conteudo.id);
+      const rotulo = conteudo.tipo === "redacao" ? "Redação" : "Resposta aberta";
+
+      if (submissao && submissao.status === "corrigida") {
+        corpo.innerHTML = `
+          <div class="card">
+            <p class="small">${rotulo}</p>
+            <p style="margin:0 0 14px;">${conteudo.enunciado}</p>
+            <p class="small">Sua resposta enviada:</p>
+            <p style="margin:0 0 14px; white-space:pre-wrap;">${submissao.resposta}</p>
+            <span class="badge concluido">Corrigido</span>
+            ${submissao.nota !== undefined && submissao.nota !== "" ? `<p style="margin:10px 0 4px;"><strong>Nota:</strong> ${submissao.nota}</p>` : ""}
+            ${submissao.feedback ? `<p style="margin:0;"><strong>Feedback do professor:</strong> ${submissao.feedback}</p>` : ""}
+          </div>
+        `;
+        return;
+      }
+
+      if (submissao && submissao.status === "aguardando") {
+        corpo.innerHTML = `
+          <div class="card">
+            <p class="small">${rotulo}</p>
+            <p style="margin:0 0 14px;">${conteudo.enunciado}</p>
+            <p class="small">Sua resposta enviada:</p>
+            <p style="margin:0 0 14px; white-space:pre-wrap;">${submissao.resposta}</p>
+            <span class="badge andamento">⏳ Aguardando correção do professor</span>
+          </div>
+        `;
+        return;
+      }
+
+      corpo.innerHTML = `
+        <div class="card">
+          <p class="small">${rotulo}</p>
+          <p style="margin:0 0 14px;">${conteudo.enunciado}</p>
+          <textarea id="respostaTexto" rows="6" placeholder="Escreva sua resposta aqui..."></textarea>
+          <button class="primary" id="btnEnviarResposta">Enviar</button>
+        </div>
+      `;
+      document.getElementById("btnEnviarResposta").addEventListener("click", async () => {
+        const resposta = document.getElementById("respostaTexto").value.trim();
+        if (!resposta) { alert("Escreva uma resposta antes de enviar."); return; }
+
+        await addDoc(collection(db, "respostasAbertas"), {
+          conteudoId: conteudo.id,
+          moduloId: moduloId,
+          userId: usuarioAtual.uid,
+          nomeAluno: usuarioAtual.nome,
+          resposta,
+          status: "aguardando",
+          dataEnvio: new Date().toISOString()
+        });
+
+        respostasAbertasDoAluno.push({ conteudoId: conteudo.id, status: "aguardando", resposta });
+        renderLista();
+        document.querySelectorAll(".content-item").forEach(el => { if (el.dataset.id === conteudo.id) el.classList.add("active"); });
+        renderAtividadeManual(conteudo, corpo);
+      });
+    }
+  </script>
+</body>
+</html>

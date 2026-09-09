@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Visão Geral - MD English Admin</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="main-area">
+      <h1>Visão Geral</h1>
+      <p class="muted">Resumo rápido da plataforma.</p>
+
+      <div class="stat-grid">
+        <div class="stat-card"><div class="value" id="statAlunos">0</div><div class="label">Alunos cadastrados</div></div>
+        <div class="stat-card"><div class="value" id="statModulos">0</div><div class="label">Módulos</div></div>
+        <div class="stat-card"><div class="value" id="statConteudos">0</div><div class="label">Conteúdos</div></div>
+        <div class="stat-card"><div class="value" id="statRespostas">0</div><div class="label">Exercícios respondidos</div></div>
+      </div>
+
+      <div class="card">
+        <h2>Próximos passos</h2>
+        <p class="muted" style="margin-bottom:12px;">Use o menu lateral para gerenciar módulos, conteúdos e alunos.</p>
+        <button class="secondary" onclick="window.location.href='admin-modulos.html'">Ir para Módulos e Conteúdos</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { firebaseConfig } from "./firebase-config.js";
+    import { renderSidebar } from "./sidebar.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { window.location.href = "index.html"; return; }
+      const userSnap = await getDoc(doc(db, "usuarios", user.uid));
+      if (!userSnap.exists() || userSnap.data().papel !== "admin") {
+        window.location.href = "index.html"; return;
+      }
+
+      renderSidebar({ activeKey: "visao-geral", role: "admin", nomeUsuario: userSnap.data().nome });
+      document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
+
+      const [usuariosSnap, modulosSnap, conteudosSnap, respostasSnap] = await Promise.all([
+        getDocs(collection(db, "usuarios")),
+        getDocs(collection(db, "modulos")),
+        getDocs(collection(db, "conteudos")),
+        getDocs(collection(db, "respostasAluno"))
+      ]);
+
+      const totalAlunos = usuariosSnap.docs.filter(d => d.data().papel === "aluno").length;
+      document.getElementById("statAlunos").textContent = totalAlunos;
+      document.getElementById("statModulos").textContent = modulosSnap.size;
+      document.getElementById("statConteudos").textContent = conteudosSnap.size;
+      document.getElementById("statRespostas").textContent = respostasSnap.size;
+    });
+  </script>
+</body>
+</html>

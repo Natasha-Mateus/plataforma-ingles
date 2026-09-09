@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Notificações - MD English</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="main-area">
+      <h1>Notificações</h1>
+      <p class="muted">Avisos de conteúdo liberado, correções prontas e mensagens do professor.</p>
+      <div id="lista"><p class="small">Carregando...</p></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { firebaseConfig } from "./firebase-config.js";
+    import { renderSidebar } from "./sidebar.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc, collection, getDocs, query, where, updateDoc } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const ICONES = { liberacao: "🔓", correcao: "📝", mensagem: "💬" };
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { window.location.href = "index.html"; return; }
+      const userSnap = await getDoc(doc(db, "usuarios", user.uid));
+      if (!userSnap.exists()) { window.location.href = "index.html"; return; }
+      const usuario = userSnap.data();
+      if (usuario.papel === "admin") { window.location.href = "admin-dashboard.html"; return; }
+
+      renderSidebar({ activeKey: "notificacoes", role: "aluno", nomeUsuario: usuario.nome, naoLidas: 0 });
+      document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
+
+      const snap = await getDocs(query(collection(db, "notificacoes"), where("userId", "==", user.uid)));
+      const notificacoes = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(b.data) - new Date(a.data));
+
+      const lista = document.getElementById("lista");
+      if (notificacoes.length === 0) {
+        lista.innerHTML = `<p class="small">Nenhuma notificação ainda.</p>`;
+      } else {
+        lista.innerHTML = notificacoes.map(n => `
+          <div class="card" style="${n.lida ? '' : 'border-color: var(--navy);'}">
+            <p style="margin:0;">${ICONES[n.tipo] || "🔔"} ${n.mensagem}</p>
+            <p class="small" style="margin:4px 0 0;">${new Date(n.data).toLocaleString("pt-BR")}</p>
+            ${n.link ? `<a href="${n.link}" style="font-size:13px; color:var(--navy);">Ver</a>` : ""}
+          </div>
+        `).join("");
+      }
+
+      // Marca todas como lidas ao visitar a página.
+      const naoLidas = snap.docs.filter(d => d.data().lida === false);
+      for (const d of naoLidas) {
+        await updateDoc(doc(db, "notificacoes", d.id), { lida: true });
+      }
+    });
+  </script>
+</body>
+</html>

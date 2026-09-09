@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mensagens - MD English Admin</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="main-area">
+      <h1>Mensagens</h1>
+      <p class="muted">Converse diretamente com um aluno.</p>
+
+      <div style="display:grid; grid-template-columns: 220px 1fr; gap: 20px;">
+        <div>
+          <h2 style="font-size:13px; color:var(--text-secondary); text-transform:uppercase;">Alunos</h2>
+          <div id="listaAlunos" class="content-list"><p class="small">Carregando...</p></div>
+        </div>
+        <div id="painelConversa">
+          <div class="card"><p class="muted" style="margin:0;">Selecione um aluno pra ver a conversa.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { firebaseConfig } from "./firebase-config.js";
+    import { renderSidebar } from "./sidebar.js";
+    import { criarNotificacao } from "./helpers.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc, collection, getDocs, query, where, addDoc } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    let alunosCache = [];
+    let adminUid = null;
+    let adminNome = "";
+    let alunoSelecionado = null;
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { window.location.href = "index.html"; return; }
+      const userSnap = await getDoc(doc(db, "usuarios", user.uid));
+      if (!userSnap.exists() || userSnap.data().papel !== "admin") {
+        window.location.href = "index.html"; return;
+      }
+      adminUid = user.uid;
+      adminNome = userSnap.data().nome || "Professor";
+
+      renderSidebar({ activeKey: "mensagens", role: "admin", nomeUsuario: adminNome });
+      document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
+
+      const usuariosSnap = await getDocs(collection(db, "usuarios"));
+      alunosCache = usuariosSnap.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.papel === "aluno");
+      renderListaAlunos();
+    });
+
+    function renderListaAlunos() {
+      const container = document.getElementById("listaAlunos");
+      if (alunosCache.length === 0) {
+        container.innerHTML = `<p class="small">Nenhum aluno cadastrado ainda.</p>`;
+        return;
+      }
+      container.innerHTML = alunosCache.map(a => `
+        <div class="content-item ${alunoSelecionado === a.uid ? 'active' : ''}" data-uid="${a.uid}">${a.nome}</div>
+      `).join("");
+      container.querySelectorAll(".content-item").forEach(el => {
+        el.addEventListener("click", () => {
+          alunoSelecionado = el.dataset.uid;
+          renderListaAlunos();
+          renderConversa();
+        });
+      });
+    }
+
+    async function renderConversa() {
+      const painel = document.getElementById("painelConversa");
+      const aluno = alunosCache.find(a => a.uid === alunoSelecionado);
+      painel.innerHTML = `
+        <div class="card" id="threadMensagens" style="max-height:400px; overflow-y:auto;">
+          <p class="small">Carregando conversa...</p>
+        </div>
+        <div class="card">
+          <textarea id="textoMensagem" rows="3" placeholder="Escrever mensagem pra ${aluno.nome}..."></textarea>
+          <button class="primary" id="btnEnviarMensagem">Enviar</button>
+        </div>
+      `;
+
+      const snap = await getDocs(query(collection(db, "mensagens"), where("participantes", "array-contains", alunoSelecionado)));
+      const mensagens = snap.docs.map(d => d.data()).sort((a, b) => new Date(a.data) - new Date(b.data));
+
+      const thread = document.getElementById("threadMensagens");
+      thread.innerHTML = mensagens.length === 0
+        ? `<p class="small">Nenhuma mensagem ainda.</p>`
+        : mensagens.map(m => `
+            <p style="margin:0 0 10px; ${m.remetenteId === adminUid ? 'text-align:right;' : ''}">
+              <span style="background:${m.remetenteId === adminUid ? 'var(--navy)' : 'var(--bg)'}; color:${m.remetenteId === adminUid ? 'white' : 'var(--text)'}; padding:8px 12px; border-radius:10px; display:inline-block; max-width:80%;">
+                ${m.texto}
+              </span>
+            </p>
+          `).join("");
+      thread.scrollTop = thread.scrollHeight;
+
+      document.getElementById("btnEnviarMensagem").addEventListener("click", async () => {
+        const texto = document.getElementById("textoMensagem").value.trim();
+        if (!texto) return;
+
+        await addDoc(collection(db, "mensagens"), {
+          remetenteId: adminUid,
+          destinatarioId: alunoSelecionado,
+          participantes: [adminUid, alunoSelecionado],
+          texto,
+          data: new Date().toISOString()
+        });
+
+        await criarNotificacao(db, {
+          userId: alunoSelecionado, tipo: "mensagem",
+          mensagem: `Nova mensagem do professor: "${texto.slice(0, 60)}${texto.length > 60 ? "..." : ""}"`,
+          link: "notificacoes.html"
+        });
+
+        await renderConversa();
+      });
+    }
+  </script>
+</body>
+</html>

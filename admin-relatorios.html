@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Relatórios - MD English Admin</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="main-area">
+      <h1>Relatórios</h1>
+      <p class="muted">Progresso de cada aluno, módulo por módulo.</p>
+      <div class="card">
+        <div style="overflow-x:auto;">
+          <table id="tabelaRelatorio">
+            <thead><tr><th>Aluno</th></tr></thead>
+            <tbody><tr><td class="small">Carregando...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { firebaseConfig } from "./firebase-config.js";
+    import { renderSidebar } from "./sidebar.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { window.location.href = "index.html"; return; }
+      const userSnap = await getDoc(doc(db, "usuarios", user.uid));
+      if (!userSnap.exists() || userSnap.data().papel !== "admin") {
+        window.location.href = "index.html"; return;
+      }
+
+      renderSidebar({ activeKey: "relatorios", role: "admin", nomeUsuario: userSnap.data().nome });
+      document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
+
+      const [usuariosSnap, modulosSnap, conteudosSnap] = await Promise.all([
+        getDocs(collection(db, "usuarios")),
+        getDocs(collection(db, "modulos")),
+        getDocs(collection(db, "conteudos"))
+      ]);
+
+      const alunos = usuariosSnap.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.papel === "aluno");
+      const modulos = modulosSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+      const conteudos = conteudosSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      const thead = document.querySelector("#tabelaRelatorio thead tr");
+      thead.innerHTML = `<th>Aluno</th>` + modulos.map(m => `<th>${m.nome}</th>`).join("") + `<th>Geral</th>`;
+
+      const tbody = document.querySelector("#tabelaRelatorio tbody");
+      if (alunos.length === 0) {
+        tbody.innerHTML = `<tr><td class="small">Nenhum aluno cadastrado ainda.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = alunos.map(aluno => {
+        const concluidos = aluno.conteudosConcluidos || [];
+        let linha = `<td>${aluno.nome}</td>`;
+
+        modulos.forEach(m => {
+          const conteudosDoModulo = conteudos.filter(c => c.moduloId === m.id);
+          const total = conteudosDoModulo.length;
+          const feitos = conteudosDoModulo.filter(c => concluidos.includes(c.id)).length;
+          const pct = total > 0 ? Math.round((feitos / total) * 100) : 0;
+          linha += `<td>${pct}% <span class="small">(${feitos}/${total})</span></td>`;
+        });
+
+        const totalGeral = conteudos.length;
+        const feitosGeral = conteudos.filter(c => concluidos.includes(c.id)).length;
+        const pctGeral = totalGeral > 0 ? Math.round((feitosGeral / totalGeral) * 100) : 0;
+        linha += `<td><strong>${pctGeral}%</strong></td>`;
+
+        return `<tr>${linha}</tr>`;
+      }).join("");
+    });
+  </script>
+</body>
+</html>

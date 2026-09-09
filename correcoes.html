@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Minhas Correções - MD English</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="main-area">
+      <h1>Minhas Correções</h1>
+      <p class="muted">Suas redações e respostas abertas, e o retorno do professor.</p>
+
+      <h2 style="font-size:14px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.03em;">Aguardando correção</h2>
+      <div id="listaAguardando" style="margin-bottom:28px;"><p class="small">Carregando...</p></div>
+
+      <h2 style="font-size:14px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.03em;">Corrigidas</h2>
+      <div id="listaCorrigidas"><p class="small">Carregando...</p></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { firebaseConfig } from "./firebase-config.js";
+    import { renderSidebar } from "./sidebar.js";
+    import { contarNaoLidas } from "./helpers.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc, collection, getDocs, query, where } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { window.location.href = "index.html"; return; }
+      const userSnap = await getDoc(doc(db, "usuarios", user.uid));
+      if (!userSnap.exists()) { window.location.href = "index.html"; return; }
+      const usuario = userSnap.data();
+      if (usuario.papel === "admin") { window.location.href = "admin-dashboard.html"; return; }
+
+      renderSidebar({ activeKey: "correcoes", role: "aluno", nomeUsuario: usuario.nome, naoLidas: await contarNaoLidas(db, user.uid) });
+      document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
+
+      const [respostasSnap, conteudosSnap] = await Promise.all([
+        getDocs(query(collection(db, "respostasAbertas"), where("userId", "==", user.uid))),
+        getDocs(collection(db, "conteudos"))
+      ]);
+
+      const conteudosPorId = {};
+      conteudosSnap.docs.forEach(d => conteudosPorId[d.id] = d.data());
+
+      const respostas = respostasSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const aguardando = respostas.filter(r => r.status === "aguardando");
+      const corrigidas = respostas.filter(r => r.status === "corrigida");
+
+      document.getElementById("listaAguardando").innerHTML = aguardando.length === 0
+        ? `<p class="small">Nada aguardando correção no momento.</p>`
+        : aguardando.map(r => renderCard(r, conteudosPorId)).join("");
+
+      document.getElementById("listaCorrigidas").innerHTML = corrigidas.length === 0
+        ? `<p class="small">Nenhuma correção recebida ainda.</p>`
+        : corrigidas.map(r => renderCard(r, conteudosPorId)).join("");
+    });
+
+    function renderCard(r, conteudosPorId) {
+      const conteudo = conteudosPorId[r.conteudoId] || {};
+      return `
+        <div class="card">
+          <p style="font-weight:500; margin:0 0 4px;">${conteudo.titulo || "Atividade"}</p>
+          <p class="small" style="margin:0 0 10px;">Enviado em ${new Date(r.dataEnvio).toLocaleDateString("pt-BR")}</p>
+          <p style="white-space:pre-wrap; margin:0 0 10px;">${r.resposta}</p>
+          ${r.status === "corrigida" ? `
+            ${r.nota !== undefined && r.nota !== "" ? `<p style="margin:0 0 4px;"><strong>Nota:</strong> ${r.nota}</p>` : ""}
+            ${r.feedback ? `<p style="margin:0;"><strong>Feedback:</strong> ${r.feedback}</p>` : ""}
+          ` : `<span class="badge andamento">⏳ Aguardando correção</span>`}
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>

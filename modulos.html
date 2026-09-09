@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Meus Módulos - MD English</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="main-area">
+      <h1>Meus Módulos</h1>
+      <p class="muted">Seu caminho de estudo, organizado em módulos.</p>
+
+      <div class="modulos-grid" id="grid">
+        <p class="small">Carregando...</p>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { firebaseConfig } from "./firebase-config.js";
+    import { renderSidebar } from "./sidebar.js";
+    import { contarNaoLidas } from "./helpers.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { window.location.href = "index.html"; return; }
+
+      const userSnap = await getDoc(doc(db, "usuarios", user.uid));
+      if (!userSnap.exists()) { window.location.href = "index.html"; return; }
+      const usuario = { uid: user.uid, ...userSnap.data() };
+      if (usuario.papel === "admin") { window.location.href = "admin-dashboard.html"; return; }
+
+      renderSidebar({ activeKey: "modulos", role: "aluno", nomeUsuario: usuario.nome, naoLidas: await contarNaoLidas(db, user.uid) });
+      document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
+
+      const liberados = usuario.conteudosLiberados || [];
+      const concluidos = usuario.conteudosConcluidos || [];
+
+      const [modulosSnap, conteudosSnap] = await Promise.all([
+        getDocs(collection(db, "modulos")),
+        getDocs(collection(db, "conteudos"))
+      ]);
+
+      const todosModulos = modulosSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+      const todosConteudos = conteudosSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      const grid = document.getElementById("grid");
+      grid.innerHTML = "";
+
+      if (todosModulos.length === 0) {
+        grid.innerHTML = `<p class="small">Nenhum módulo criado ainda.</p>`;
+        return;
+      }
+
+      todosModulos.forEach(modulo => {
+        const conteudosDoModulo = todosConteudos.filter(c => c.moduloId === modulo.id);
+        const totalConteudos = conteudosDoModulo.length;
+        const conteudosLiberadosNoModulo = conteudosDoModulo.filter(c => liberados.includes(c.id));
+        const conteudosConcluidosNoModulo = conteudosDoModulo.filter(c => concluidos.includes(c.id));
+        const percentual = totalConteudos > 0 ? Math.round((conteudosConcluidosNoModulo.length / totalConteudos) * 100) : 0;
+
+        let status, badgeClass;
+        if (modulo.disponivel === false) {
+          status = "Em breve"; badgeClass = "embreve";
+        } else if (conteudosLiberadosNoModulo.length === 0) {
+          status = "Bloqueado"; badgeClass = "bloqueado";
+        } else if (percentual === 100 && totalConteudos > 0) {
+          status = "Concluído"; badgeClass = "concluido";
+        } else if (percentual > 0) {
+          status = "Em andamento"; badgeClass = "andamento";
+        } else {
+          status = "Liberado"; badgeClass = "liberado";
+        }
+
+        const podeEntrar = conteudosLiberadosNoModulo.length > 0;
+
+        const card = document.createElement("div");
+        card.className = "modulo-card";
+        card.innerHTML = `
+          <span class="badge ${badgeClass}">${status}</span>
+          <h3>${modulo.nome}</h3>
+          <p class="desc">${modulo.descricao || ""}</p>
+          <p class="meta">Nível: ${modulo.nivel || "—"} · ${totalConteudos} conteúdo(s) · ${conteudosConcluidosNoModulo.length} concluído(s)</p>
+          <div class="progress-outer"><div class="progress-inner" style="width:${percentual}%;"></div></div>
+          <button class="${podeEntrar ? 'primary' : ''}" ${podeEntrar ? '' : 'disabled'} style="margin-top:6px;">
+            ${podeEntrar ? 'Continuar' : 'Bloqueado'}
+          </button>
+        `;
+        if (podeEntrar) {
+          card.querySelector("button").addEventListener("click", () => {
+            window.location.href = `modulo.html?id=${modulo.id}`;
+          });
+        }
+        grid.appendChild(card);
+      });
+    });
+  </script>
+</body>
+</html>
