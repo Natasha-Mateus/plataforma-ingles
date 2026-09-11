@@ -10,6 +10,11 @@ export async function contarNaoLidas(db, userId) {
   return snap.size;
 }
 
+export async function contarAguardandoCorrecao(db) {
+  const snap = await getDocs(query(collection(db, "respostasAbertas"), where("status", "==", "aguardando")));
+  return snap.size;
+}
+
 
 export async function criarNotificacao(db, { userId, tipo, mensagem, link }) {
   await addDoc(collection(db, "notificacoes"), {

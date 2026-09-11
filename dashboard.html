@@ -65,7 +65,7 @@
 
       if (usuario.papel === "admin") { window.location.href = "admin-dashboard.html"; return; }
 
-      renderSidebar({ activeKey: "dashboard", role: "aluno", nomeUsuario: usuario.nome, naoLidas: await contarNaoLidas(db, user.uid) });
+      renderSidebar({ activeKey: "dashboard", role: "aluno", nomeUsuario: usuario.nome, badges: { notificacoes: await contarNaoLidas(db, user.uid) } });
       document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
 
       document.getElementById("saudacao").textContent = `Olá, ${usuario.nome || ""}!`;

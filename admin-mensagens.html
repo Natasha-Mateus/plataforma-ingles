@@ -28,7 +28,7 @@
   <script type="module">
     import { firebaseConfig } from "./firebase-config.js";
     import { renderSidebar } from "./sidebar.js";
-    import { criarNotificacao } from "./helpers.js";
+    import { criarNotificacao, contarAguardandoCorrecao } from "./helpers.js";
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
     import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
     import { getFirestore, doc, getDoc, collection, getDocs, query, where, addDoc } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
@@ -51,7 +51,7 @@
       adminUid = user.uid;
       adminNome = userSnap.data().nome || "Professor";
 
-      renderSidebar({ activeKey: "mensagens", role: "admin", nomeUsuario: adminNome });
+      renderSidebar({ activeKey: "mensagens", role: "admin", nomeUsuario: adminNome, badges: { correcoes: await contarAguardandoCorrecao(db) } });
       document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
 
       const usuariosSnap = await getDocs(collection(db, "usuarios"));

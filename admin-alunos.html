@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Alunos - MD English Admin</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="main-area">
+      <h1>Alunos</h1>
+      <p class="muted">Alunos cadastrados na plataforma.</p>
+
+      <div class="card">
+        <h2>Cadastrar aluno</h2>
+        <p class="small" style="margin-top:-6px;">
+          A conta de login (email/senha) ainda é criada direto no Console do Firebase &gt; Authentication &gt; Add user.
+          Depois de criar lá, cole o UID aqui pra registrar o papel dele:
+        </p>
+        <label>UID do aluno (copiado do Console do Firebase)</label>
+        <input type="text" id="uidAluno" placeholder="Ex: aB3xY..." />
+        <label>Nome do aluno</label>
+        <input type="text" id="nomeNovoAluno" placeholder="Nome exibido na plataforma" />
+        <button class="primary" id="btnCadastrarAluno">Cadastrar como aluno</button>
+      </div>
+
+      <div class="card">
+        <h2>Lista de alunos</h2>
+        <table id="tabelaAlunos">
+          <thead><tr><th>Nome</th><th>Conteúdos liberados</th><th>Conteúdos concluídos</th></tr></thead>
+          <tbody><tr><td colspan="3" class="small">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { firebaseConfig } from "./firebase-config.js";
+    import { renderSidebar } from "./sidebar.js";
+    import { contarAguardandoCorrecao } from "./helpers.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { window.location.href = "index.html"; return; }
+      const userSnap = await getDoc(doc(db, "usuarios", user.uid));
+      if (!userSnap.exists() || userSnap.data().papel !== "admin") {
+        window.location.href = "index.html"; return;
+      }
+
+      renderSidebar({ activeKey: "alunos", role: "admin", nomeUsuario: userSnap.data().nome, badges: { correcoes: await contarAguardandoCorrecao(db) } });
+      document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
+
+      await carregarAlunos();
+    });
+
+    document.getElementById("btnCadastrarAluno").addEventListener("click", async () => {
+      const uid = document.getElementById("uidAluno").value.trim();
+      const nome = document.getElementById("nomeNovoAluno").value.trim();
+      if (!uid || !nome) { alert("Preencha o UID e o nome."); return; }
+
+      await setDoc(doc(db, "usuarios", uid), { nome, papel: "aluno", conteudosLiberados: [], conteudosConcluidos: [] });
+      document.getElementById("uidAluno").value = "";
+      document.getElementById("nomeNovoAluno").value = "";
+      await carregarAlunos();
+      alert("Aluno cadastrado!");
+    });
+
+    async function carregarAlunos() {
+      const snap = await getDocs(collection(db, "usuarios"));
+      const alunos = snap.docs.map(d => d.data()).filter(u => u.papel === "aluno");
+
+      const tbody = document.querySelector("#tabelaAlunos tbody");
+      if (alunos.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="3" class="small">Nenhum aluno cadastrado ainda.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = alunos.map(a => `
+        <tr>
+          <td>${a.nome}</td>
+          <td>${(a.conteudosLiberados || []).length}</td>
+          <td>${(a.conteudosConcluidos || []).length}</td>
+        </tr>
+      `).join("");
+    }
+  </script>
+</body>
+</html>

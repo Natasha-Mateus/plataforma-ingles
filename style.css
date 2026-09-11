@@ -240,7 +240,40 @@ button.link {
   background: #000;
   margin-bottom: 16px;
 }
-.video-frame iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0; }
+.video-frame iframe, .video-frame div.yt-embed { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0; }
+
+.video-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--navy-dark);
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 10px 14px;
+  margin-top: -6px;
+  margin-bottom: 16px;
+}
+.video-controls button {
+  background: transparent;
+  border: none;
+  color: white;
+  font-size: 16px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.video-controls button:hover { opacity: 0.8; }
+.video-controls input[type="range"] {
+  flex: 1;
+  margin: 0;
+  accent-color: var(--red);
+}
+.video-controls .tempo { color: rgba(255,255,255,0.8); font-size: 12px; white-space: nowrap; }
+
+/* ---------- Visualizador de PDF ---------- */
+.pdf-viewer { background: var(--navy-dark); border-radius: var(--radius); padding: 14px; text-align: center; margin-bottom: 16px; }
+.pdf-viewer canvas { max-width: 100%; border-radius: 4px; background: white; }
+.pdf-controls { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 10px; }
+.pdf-controls button { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; }
+.pdf-controls span { color: white; font-size: 13px; }
 
 .option {
   display: flex;

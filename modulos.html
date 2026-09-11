@@ -39,7 +39,7 @@
       const usuario = { uid: user.uid, ...userSnap.data() };
       if (usuario.papel === "admin") { window.location.href = "admin-dashboard.html"; return; }
 
-      renderSidebar({ activeKey: "modulos", role: "aluno", nomeUsuario: usuario.nome, naoLidas: await contarNaoLidas(db, user.uid) });
+      renderSidebar({ activeKey: "modulos", role: "aluno", nomeUsuario: usuario.nome, badges: { notificacoes: await contarNaoLidas(db, user.uid) } });
       document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
 
       const liberados = usuario.conteudosLiberados || [];
@@ -63,12 +63,31 @@
         return;
       }
 
+      function anelProgresso(pct) {
+        const size = 56, stroke = 5, r = (size - stroke) / 2, c = 2 * Math.PI * r;
+        const offset = c - (pct / 100) * c;
+        return `
+          <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="flex-shrink:0;">
+            <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${stroke}" />
+            <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--red)" stroke-width="${stroke}"
+              stroke-dasharray="${c}" stroke-dashoffset="${offset}" stroke-linecap="round"
+              transform="rotate(-90 ${size/2} ${size/2})" />
+            <text x="50%" y="50%" text-anchor="middle" dy="0.35em" font-size="13" font-weight="700" fill="var(--text)">${pct}%</text>
+          </svg>
+        `;
+      }
+
+      function chip(texto) {
+        return `<span style="background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:3px 10px; font-size:11px; color:var(--text-secondary); white-space:nowrap;">${texto}</span>`;
+      }
+
       todosModulos.forEach(modulo => {
         const conteudosDoModulo = todosConteudos.filter(c => c.moduloId === modulo.id);
         const totalConteudos = conteudosDoModulo.length;
         const conteudosLiberadosNoModulo = conteudosDoModulo.filter(c => liberados.includes(c.id));
         const conteudosConcluidosNoModulo = conteudosDoModulo.filter(c => concluidos.includes(c.id));
         const percentual = totalConteudos > 0 ? Math.round((conteudosConcluidosNoModulo.length / totalConteudos) * 100) : 0;
+        const pendentes = conteudosLiberadosNoModulo.length - conteudosConcluidosNoModulo.length;
 
         let status, badgeClass;
         if (modulo.disponivel === false) {
@@ -88,12 +107,23 @@
         const card = document.createElement("div");
         card.className = "modulo-card";
         card.innerHTML = `
-          <span class="badge ${badgeClass}">${status}</span>
-          <h3>${modulo.nome}</h3>
-          <p class="desc">${modulo.descricao || ""}</p>
-          <p class="meta">Nível: ${modulo.nivel || "—"} · ${totalConteudos} conteúdo(s) · ${conteudosConcluidosNoModulo.length} concluído(s)</p>
-          <div class="progress-outer"><div class="progress-inner" style="width:${percentual}%;"></div></div>
-          <button class="${podeEntrar ? 'primary' : ''}" ${podeEntrar ? '' : 'disabled'} style="margin-top:6px;">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <span class="badge ${badgeClass}">${status}</span>
+            ${modulo.nivel ? chip(modulo.nivel) : ""}
+          </div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            ${anelProgresso(percentual)}
+            <div style="min-width:0;">
+              <h3 style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${modulo.nome}</h3>
+              <p class="desc" style="margin:2px 0 0; min-height:auto;">${modulo.descricao || ""}</p>
+            </div>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            ${chip(`${totalConteudos} conteúdo(s)`)}
+            ${chip(`${conteudosConcluidosNoModulo.length} concluído(s)`)}
+            ${chip(`${Math.max(pendentes, 0)} pendente(s)`)}
+          </div>
+          <button class="${podeEntrar ? 'primary' : ''}" ${podeEntrar ? '' : 'disabled'} style="margin-top:2px;">
             ${podeEntrar ? 'Continuar' : 'Bloqueado'}
           </button>
         `;

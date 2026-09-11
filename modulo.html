@@ -32,6 +32,7 @@
     import { firebaseConfig } from "./firebase-config.js";
     import { renderSidebar } from "./sidebar.js";
     import { contarNaoLidas, liberarProximoSeSequencial } from "./helpers.js";
+    import { criarPlayerCustomizado, pararPlayerCustomizado, renderizarPdfPaginado } from "./player.js";
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
     import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
     import {
@@ -64,7 +65,7 @@
       usuarioAtual = { uid: user.uid, ...userSnap.data() };
       if (usuarioAtual.papel === "admin") { window.location.href = "admin-dashboard.html"; return; }
 
-      renderSidebar({ activeKey: "modulos", role: "aluno", nomeUsuario: usuarioAtual.nome, naoLidas: await contarNaoLidas(db, user.uid) });
+      renderSidebar({ activeKey: "modulos", role: "aluno", nomeUsuario: usuarioAtual.nome, badges: { notificacoes: await contarNaoLidas(db, user.uid) } });
       document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
 
       liberados = usuarioAtual.conteudosLiberados || [];
@@ -120,24 +121,79 @@
       });
     }
 
+    function renderNavAnteriorProxima(ordenado, posicao) {
+      const nav = document.getElementById("navAnteriorProxima");
+      const anterior = posicao > 0 ? ordenado[posicao - 1] : null;
+      const proximo = posicao < ordenado.length - 1 ? ordenado[posicao + 1] : null;
+
+      const anteriorHabilitado = anterior && liberados.includes(anterior.id);
+      const proximoHabilitado = proximo && liberados.includes(proximo.id);
+
+      nav.innerHTML = `
+        <button ${anterior ? "" : "style='visibility:hidden;'"} ${anteriorHabilitado ? "" : "disabled"} id="btnAnterior">
+          ← Anterior
+        </button>
+        <button class="${proximoHabilitado ? 'primary' : ''}" ${proximo ? "" : "style='visibility:hidden;'"} ${proximoHabilitado ? "" : "disabled"} id="btnProximo">
+          ${proximo && !proximoHabilitado ? "🔒 Bloqueado" : "Próxima atividade →"}
+        </button>
+      `;
+
+      if (anteriorHabilitado) {
+        document.getElementById("btnAnterior").addEventListener("click", () => {
+          const el = document.querySelector(`.content-item[data-id="${anterior.id}"]`);
+          abrirConteudo(anterior, el);
+        });
+      }
+      if (proximoHabilitado) {
+        document.getElementById("btnProximo").addEventListener("click", () => {
+          const el = document.querySelector(`.content-item[data-id="${proximo.id}"]`);
+          abrirConteudo(proximo, el);
+        });
+      }
+    }
+
     async function abrirConteudo(conteudo, itemEl) {
+      pararPlayerCustomizado();
       document.querySelectorAll(".content-item").forEach(el => el.classList.remove("active"));
       itemEl.classList.add("active");
 
+      const ordenado = [...conteudosDoModulo].sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+      const posicao = ordenado.findIndex(c => c.id === conteudo.id);
+
       const area = document.getElementById("areaConteudo");
-      area.innerHTML = `<h2>${conteudo.titulo}</h2><div id="corpoConteudo"></div>`;
+      area.innerHTML = `
+        <p class="small" style="margin-bottom:2px;">
+          <a href="modulos.html" style="color:var(--navy);">Meus Módulos</a> ›
+          <span>${moduloAtual.nome}</span> ›
+          <span>${conteudo.titulo}</span>
+        </p>
+        <div style="display:flex; align-items:baseline; justify-content:space-between;">
+          <h2 style="margin:0 0 12px;">${conteudo.titulo}</h2>
+          <span class="small">${posicao + 1} / ${ordenado.length}</span>
+        </div>
+        <div id="corpoConteudo"></div>
+        <div id="navAnteriorProxima" style="display:flex; justify-content:space-between; margin-top:20px;"></div>
+      `;
       const corpo = document.getElementById("corpoConteudo");
+      renderNavAnteriorProxima(ordenado, posicao);
 
       if (conteudo.tipo === "pdf") {
         corpo.innerHTML = `
-          <div class="card" style="text-align:center;">
-            <p class="muted" style="margin-bottom:12px;">Documento em PDF</p>
-            <a href="${conteudo.url}" target="_blank" rel="noopener">
-              <button class="secondary">Abrir / baixar PDF</button>
-            </a>
+          <div class="pdf-viewer" id="pdfContainer-${conteudo.id}"></div>
+          <div id="pdfFallback-${conteudo.id}" style="display:none;" class="card">
+            <p class="muted" style="margin-bottom:12px;">Não foi possível abrir este PDF aqui dentro (o link pode não permitir isso). Você pode abrir direto:</p>
+            <a href="${conteudo.url}" target="_blank" rel="noopener"><button class="secondary">Abrir / baixar PDF</button></a>
           </div>
           <div id="areaExercicio"></div>
         `;
+        renderizarPdfPaginado({
+          containerId: `pdfContainer-${conteudo.id}`,
+          url: conteudo.url,
+          onErro: () => {
+            document.getElementById(`pdfContainer-${conteudo.id}`).style.display = "none";
+            document.getElementById(`pdfFallback-${conteudo.id}`).style.display = "block";
+          }
+        });
         await marcarConcluidoSeSemExercicio(conteudo);
       } else if (conteudo.tipo === "imagem") {
         corpo.innerHTML = `
@@ -166,14 +222,18 @@
         renderAtividadeManual(conteudo, corpo);
         return;
       } else {
-        // vídeo (padrão / retrocompatível)
+        // vídeo com player customizado (YouTube IFrame API)
+        pararPlayerCustomizado();
         corpo.innerHTML = `
-          <div class="video-frame">
-            <iframe src="https://www.youtube.com/embed/${conteudo.youtubeId}?rel=0&modestbranding=1"
-              allow="accelerometer; autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
-          </div>
+          <div class="video-frame"><div id="ytPlayer-${conteudo.id}"></div></div>
+          <div class="video-controls" id="videoControls-${conteudo.id}"></div>
           <div id="areaExercicio"></div>
         `;
+        criarPlayerCustomizado({
+          containerId: `ytPlayer-${conteudo.id}`,
+          controlsId: `videoControls-${conteudo.id}`,
+          youtubeId: conteudo.youtubeId
+        });
       }
 
       await renderExercicioSeHouver(conteudo);
@@ -197,6 +257,8 @@
         const desbloqueado = await liberarProximoSeSequencial(db, { modulo: moduloAtual, moduloId, conteudosDoModulo, conteudoAtualId: conteudo.id, aluno: { uid: usuarioAtual.uid, conteudosLiberados: liberados } });
         if (desbloqueado) liberados = [...liberados, desbloqueado];
         renderLista();
+        const ordenadoAtual = [...conteudosDoModulo].sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+        renderNavAnteriorProxima(ordenadoAtual, ordenadoAtual.findIndex(c => c.id === conteudo.id));
         document.querySelectorAll(".content-item").forEach(el => { if (el.dataset.id === conteudo.id) el.classList.add("active"); });
         areaEx.innerHTML = `<p class="small">✓ Concluído!</p>`;
       });
@@ -239,6 +301,8 @@
               const desbloqueado = await liberarProximoSeSequencial(db, { modulo: moduloAtual, moduloId, conteudosDoModulo, conteudoAtualId: conteudo.id, aluno: { uid: usuarioAtual.uid, conteudosLiberados: liberados } });
               if (desbloqueado) liberados = [...liberados, desbloqueado];
               renderLista();
+              const ordenadoAtual = [...conteudosDoModulo].sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+              renderNavAnteriorProxima(ordenadoAtual, ordenadoAtual.findIndex(c => c.id === conteudo.id));
               document.querySelectorAll(".content-item").forEach(el => { if (el.dataset.id === conteudo.id) el.classList.add("active"); });
             }
           });

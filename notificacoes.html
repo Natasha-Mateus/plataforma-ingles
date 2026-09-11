@@ -36,7 +36,7 @@
       const usuario = userSnap.data();
       if (usuario.papel === "admin") { window.location.href = "admin-dashboard.html"; return; }
 
-      renderSidebar({ activeKey: "notificacoes", role: "aluno", nomeUsuario: usuario.nome, naoLidas: 0 });
+      renderSidebar({ activeKey: "notificacoes", role: "aluno", nomeUsuario: usuario.nome, badges: {} });
       document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
 
       const snap = await getDocs(query(collection(db, "notificacoes"), where("userId", "==", user.uid)));

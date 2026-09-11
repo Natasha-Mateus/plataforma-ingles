@@ -58,7 +58,7 @@
   <script type="module">
     import { firebaseConfig } from "./firebase-config.js";
     import { renderSidebar } from "./sidebar.js";
-    import { criarNotificacao } from "./helpers.js";
+    import { criarNotificacao, contarAguardandoCorrecao } from "./helpers.js";
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
     import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
     import {
@@ -82,7 +82,7 @@
         window.location.href = "index.html"; return;
       }
 
-      renderSidebar({ activeKey: "modulos", role: "admin", nomeUsuario: userSnap.data().nome });
+      renderSidebar({ activeKey: "modulos", role: "admin", nomeUsuario: userSnap.data().nome, badges: { correcoes: await contarAguardandoCorrecao(db) } });
       document.getElementById("btnSairSidebar").addEventListener("click", () => signOut(auth).then(() => window.location.href = "index.html"));
 
       await carregarTudo();
